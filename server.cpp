@@ -28,9 +28,10 @@ int main(int argc, char **argv) {
 
 
 	//------------ main loop ------------
-	constexpr float ServerTick = 1.0f / 10.0f; //TODO: set a server tick that makes sense for your game
+	constexpr float ServerTick = 1.0f; //TODO: set a server tick that makes sense for your game
 
 	//server state:
+	bool game_started = false;
 
 	//per-client state:
 	struct PlayerInfo {
@@ -41,13 +42,9 @@ int main(int argc, char **argv) {
 		}
 		std::string name;
 
-		uint32_t left_presses = 0;
-		uint32_t right_presses = 0;
-		uint32_t up_presses = 0;
-		uint32_t down_presses = 0;
+		uint32_t choice = 0;
 
-		int32_t total = 0;
-
+		uint32_t score = 0;
 	};
 	std::unordered_map< Connection *, PlayerInfo > players;
 
@@ -68,6 +65,11 @@ int main(int argc, char **argv) {
 					//create some player info for them:
 					players.emplace(c, PlayerInfo());
 
+					// start game only when 2 players are connected
+					if (players.size() > 1)
+					{
+						game_started = true;
+					}
 
 				} else if (evt == Connection::OnClose) {
 					//client disconnected:
@@ -77,10 +79,13 @@ int main(int argc, char **argv) {
 					assert(f != players.end());
 					players.erase(f);
 
-
+					if (players.size() < 1)
+					{
+						game_started = false;
+					}
 				} else { assert(evt == Connection::OnRecv);
 					//got data from client:
-					std::cout << "got bytes:\n" << hex_dump(c->recv_buffer); std::cout.flush();
+					//std::cout << "got bytes:\n" << hex_dump(c->recv_buffer); std::cout.flush();
 
 					//look up in players list:
 					auto f = players.find(c);
@@ -88,68 +93,66 @@ int main(int argc, char **argv) {
 					PlayerInfo &player = f->second;
 
 					//handle messages from client:
-					//TODO: update for the sorts of messages your clients send
-					while (c->recv_buffer.size() >= 5) {
-						//expecting five-byte messages 'b' (left count) (right count) (down count) (up count)
+					while (c->recv_buffer.size() >= 1) {
+						//expecting 2-byte messages 'c' (player choice)
 						char type = c->recv_buffer[0];
-						if (type != 'b') {
-							std::cout << " message of non-'b' type received from client!" << std::endl;
+						if (type != 'c') {
+							std::cout << " message of non-'c' type received from client!" << std::endl;
 							//shut down client connection:
 							c->close();
 							return;
 						}
-						uint8_t left_count = c->recv_buffer[1];
-						uint8_t right_count = c->recv_buffer[2];
-						uint8_t down_count = c->recv_buffer[3];
-						uint8_t up_count = c->recv_buffer[4];
+						// 2nd byte tells whether new data is being sent by client
+						bool is_dirty = (c->recv_buffer[1] == 'y');
+						if (is_dirty)
+						{
+							uint32_t player_choice = c->recv_buffer[2];
+							player.choice = player_choice;
+						}
 
-						player.left_presses += left_count;
-						player.right_presses += right_count;
-						player.down_presses += down_count;
-						player.up_presses += up_count;
-
-						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + 5);
+						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + c->recv_buffer.size());
 					}
 				}
 			}, remain);
 		}
 
 		//update current game state
-		//TODO: replace with *your* game state update
-		std::string status_message = "";
-		int32_t overall_sum = 0;
-		for (auto &[c, player] : players) {
-			(void)c; //work around "unused variable" warning on whatever version of g++ github actions is running
-			for (; player.left_presses > 0; --player.left_presses) {
-				player.total -= 1;
-			}
-			for (; player.right_presses > 0; --player.right_presses) {
-				player.total += 1;
-			}
-			for (; player.down_presses > 0; --player.down_presses) {
-				player.total -= 10;
-			}
-			for (; player.up_presses > 0; --player.up_presses) {
-				player.total += 10;
-			}
-			if (status_message != "") status_message += " + ";
-			status_message += std::to_string(player.total) + " (" + player.name + ")";
-
-			overall_sum += player.total;
+		if (!game_started)
+		{
+			continue;
 		}
-		status_message += " = " + std::to_string(overall_sum);
+		
+		//TODO: replace with *your* game state update
+		// std::string status_message = "";
+		// int32_t overall_sum = 0;
+		// for (auto &[c, player] : players) {
+		// 	(void)c; //work around "unused variable" warning on whatever version of g++ github actions is running
+			
+		// 	std::cout << "Player " << player.name << " : " << player.choice << std::endl;
+
+		// 	if (status_message != "") status_message += " + ";
+		// 	status_message += std::to_string(player.total) + " (" + player.name + ")";
+
+		// 	overall_sum += player.total;
+		// }
+		// status_message += " = " + std::to_string(overall_sum);
 		//std::cout << status_message << std::endl; //DEBUG
 
 		//send updated game state to all clients
-		//TODO: update for your game state
+		
+		/*
+		* Server game state structure: (40 bytes)
+		* - round num
+		* - time left (in seconds : int)
+		* - chosen image index
+		* - p1 score, p2 score
+		*/
 		for (auto &[c, player] : players) {
 			(void)player; //work around "unused variable" warning on whatever g++ github actions uses
-			//send an update starting with 'm', a 24-bit size, and a blob of text:
+
+			//send an update starting with 'm'
 			c->send('m');
-			c->send(uint8_t(status_message.size() >> 16));
-			c->send(uint8_t((status_message.size() >> 8) % 256));
-			c->send(uint8_t(status_message.size() % 256));
-			c->send_buffer.insert(c->send_buffer.end(), status_message.begin(), status_message.end());
+			c->send(game_started ? 'y':'n');
 		}
 
 	}

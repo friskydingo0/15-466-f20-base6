@@ -20,9 +20,14 @@ struct PlayMode : Mode {
 
 	//input tracking:
 	struct Button {
-		uint8_t downs = 0;
 		uint8_t pressed = 0;
-	} left, right, down, up;
+	} one, two, four, three;
+
+	// choice var
+	uint8_t choice = 0;
+
+	// is game state dirty (changed)
+	bool is_dirty = false;
 
 	//last message from server:
 	std::string server_message;

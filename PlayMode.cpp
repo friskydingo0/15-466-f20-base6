@@ -9,6 +9,8 @@
 
 #include <random>
 
+#define log std::cout
+
 PlayMode::PlayMode(Client &client_) : client(client_) {
 }
 
@@ -20,35 +22,39 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 	if (evt.type == SDL_KEYDOWN) {
 		if (evt.key.repeat) {
 			//ignore repeats
-		} else if (evt.key.keysym.sym == SDLK_a) {
-			left.downs += 1;
-			left.pressed = true;
+		} else if (evt.key.keysym.sym == SDLK_1) {
+			choice = 1;
+			is_dirty = true;
+			one.pressed = true;
 			return true;
-		} else if (evt.key.keysym.sym == SDLK_d) {
-			right.downs += 1;
-			right.pressed = true;
+		} else if (evt.key.keysym.sym == SDLK_2) {
+			choice = 2;
+			is_dirty = true;
+			two.pressed = true;
 			return true;
-		} else if (evt.key.keysym.sym == SDLK_w) {
-			up.downs += 1;
-			up.pressed = true;
+		} else if (evt.key.keysym.sym == SDLK_3) {
+			choice = 3;
+			is_dirty = true;
+			three.pressed = true;
 			return true;
-		} else if (evt.key.keysym.sym == SDLK_s) {
-			down.downs += 1;
-			down.pressed = true;
+		} else if (evt.key.keysym.sym == SDLK_4) {
+			choice = 4;
+			is_dirty = true;
+			four.pressed = true;
 			return true;
 		}
 	} else if (evt.type == SDL_KEYUP) {
-		if (evt.key.keysym.sym == SDLK_a) {
-			left.pressed = false;
+		if (evt.key.keysym.sym == SDLK_1) {
+			one.pressed = false;
 			return true;
-		} else if (evt.key.keysym.sym == SDLK_d) {
-			right.pressed = false;
+		} else if (evt.key.keysym.sym == SDLK_2) {
+			two.pressed = false;
 			return true;
-		} else if (evt.key.keysym.sym == SDLK_w) {
-			up.pressed = false;
+		} else if (evt.key.keysym.sym == SDLK_3) {
+			three.pressed = false;
 			return true;
-		} else if (evt.key.keysym.sym == SDLK_s) {
-			down.pressed = false;
+		} else if (evt.key.keysym.sym == SDLK_4) {
+			four.pressed = false;
 			return true;
 		}
 	}
@@ -57,23 +63,16 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 }
 
 void PlayMode::update(float elapsed) {
-
+	
 	//queue data for sending to server:
-	//TODO: send something that makes sense for your game
-	if (left.downs || right.downs || down.downs || up.downs) {
-		//send a five-byte message of type 'b':
-		client.connections.back().send('b');
-		client.connections.back().send(left.downs);
-		client.connections.back().send(right.downs);
-		client.connections.back().send(down.downs);
-		client.connections.back().send(up.downs);
-	}
+	//send a 2-byte message of type 'c':
+	client.connections.back().send('c');
+	client.connections.back().send(is_dirty ? 'y' : 'n');
 
-	//reset button press counters:
-	left.downs = 0;
-	right.downs = 0;
-	up.downs = 0;
-	down.downs = 0;
+	if (is_dirty) {
+		log << "Sending choice " << choice << std::endl;
+		client.connections.back().send(choice);
+	}
 
 	//send/receive data:
 	client.poll([this](Connection *c, Connection::Event event){
@@ -85,24 +84,33 @@ void PlayMode::update(float elapsed) {
 		} else { assert(event == Connection::OnRecv);
 			std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
 			//expecting message(s) like 'm' + 3-byte length + length bytes of text:
-			while (c->recv_buffer.size() >= 4) {
+			while (c->recv_buffer.size() >= 2) {
 				std::cout << "[" << c->socket << "] recv'd data. Current buffer:\n" << hex_dump(c->recv_buffer); std::cout.flush();
 				char type = c->recv_buffer[0];
 				if (type != 'm') {
 					throw std::runtime_error("Server sent unknown message type '" + std::to_string(type) + "'");
+					break;
 				}
-				uint32_t size = (
-					(uint32_t(c->recv_buffer[1]) << 16) | (uint32_t(c->recv_buffer[2]) << 8) | (uint32_t(c->recv_buffer[3]))
-				);
-				if (c->recv_buffer.size() < 4 + size) break; //if whole message isn't here, can't process
+
+				// bool time_left = (bool)c->recv_buffer[1];
+				// uint8_t round_num = c->recv_buffer[2];
+				server_message = "Msgc->recv_buffer: " + std::to_string(c->recv_buffer[1]);
+
+				// uint32_t size = (
+					// (uint32_t(c->recv_buffer[1]) << 16) | (uint32_t(c->recv_buffer[2]) << 8) | (uint32_t(c->recv_buffer[3]))
+				// );
+				// if (c->recv_buffer.size() < 4 + size) break; //if whole message isn't here, can't process
 				//whole message *is* here, so set current server message:
-				server_message = std::string(c->recv_buffer.begin() + 4, c->recv_buffer.begin() + 4 + size);
+				// server_message = std::string(c->recv_buffer.begin() + 4, c->recv_buffer.begin() + 4 + size);
 
 				//and consume this part of the buffer:
-				c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + 4 + size);
+				c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + 2);
 			}
 		}
 	}, 0.0);
+
+	choice = 0;
+	is_dirty = false;
 }
 
 void PlayMode::draw(glm::uvec2 const &drawable_size) {
