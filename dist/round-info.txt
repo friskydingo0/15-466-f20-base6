@@ -1,0 +1,3 @@
+banister.png|Banister|Handrail|Corridor|
+egg.png|Breakfast|Abortion|Alone|
+flag-dessert.png|Flag|Sweet|Symmetry|

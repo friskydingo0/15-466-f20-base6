@@ -9,6 +9,8 @@
 #include <cassert>
 #include <unordered_map>
 
+#include <random>
+
 int main(int argc, char **argv) {
 #ifdef _WIN32
 	//when compiled on windows, unhandled exceptions don't have their message printed, which can make debugging simple issues difficult.
@@ -33,6 +35,25 @@ int main(int argc, char **argv) {
 	//server state:
 	bool game_started = false;
 
+	// https://diego.assencio.com/?index=6890b8c50169ef45b74db135063c227c
+	std::random_device device;
+	std::mt19937 mt(device());
+	std::uniform_int_distribution<int> distribution(0,2);
+
+	uint32_t question_index = 0;
+	uint32_t round_num = 0;
+	char result = 'n';
+
+	float round_timer = 0;
+	const float MaxTime = 60.0f;	// Maximum round time in seconds
+
+	bool is_dirty = false;
+
+	int p1_choice = 0, p2_choice = 0;
+
+	// game logic: per-round tracking
+	int answers_recvd = 0;
+
 	//per-client state:
 	struct PlayerInfo {
 		PlayerInfo() {
@@ -40,15 +61,59 @@ int main(int argc, char **argv) {
 			name = "Player" + std::to_string(next_player_id);
 			next_player_id += 1;
 		}
+
 		std::string name;
-
 		uint32_t choice = 0;
-
 		uint32_t score = 0;
 	};
 	std::unordered_map< Connection *, PlayerInfo > players;
 
+	// generating random distribution int for image index
+	auto get_random_index = [&mt, &distribution] (int current_index) {
+		int random_num;
+		do
+		{
+			random_num = distribution(mt);
+		} while (random_num == current_index);
+		return random_num;
+	};
+	question_index = get_random_index(question_index);
+
+	// update + network sync loop
 	while (true) {
+
+		// game state update (game rules)
+		if (game_started)
+		{
+			if (answers_recvd > 1)
+			{
+				assert(players.size() == 2);
+				uint32_t choice = 0;;
+				// if both players chose correctly, show win. else, show lose
+				for (auto &[c, player] : players) {
+					(void)player;
+
+					if (choice == 0)
+						choice = player.choice;
+					else if (choice == player.choice) {
+						result = 'w';
+					}
+					else {
+						result = 'l';
+					}
+				}
+
+				// start a new round
+				// pick a different question
+				round_num++;
+				answers_recvd = 0;
+				question_index = get_random_index(question_index);
+				is_dirty = true;
+			}
+			
+		}
+		
+
 		static auto next_tick = std::chrono::steady_clock::now() + std::chrono::duration< double >(ServerTick);
 		//process incoming data from clients until a tick has elapsed:
 		while (true) {
@@ -69,7 +134,11 @@ int main(int argc, char **argv) {
 					if (players.size() > 1)
 					{
 						game_started = true;
+						round_timer = MaxTime;
+						is_dirty = true;
 					}
+
+					std::cout << "Player connected. Total: " << players.size() << std::endl;
 
 				} else if (evt == Connection::OnClose) {
 					//client disconnected:
@@ -103,11 +172,12 @@ int main(int argc, char **argv) {
 							return;
 						}
 						// 2nd byte tells whether new data is being sent by client
-						bool is_dirty = (c->recv_buffer[1] == 'y');
-						if (is_dirty)
+						bool new_data = (c->recv_buffer[1] == 'y');
+						if (new_data)
 						{
 							uint32_t player_choice = c->recv_buffer[2];
 							player.choice = player_choice;
+							answers_recvd++;
 						}
 
 						c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + c->recv_buffer.size());
@@ -116,30 +186,13 @@ int main(int argc, char **argv) {
 			}, remain);
 		}
 
-		//update current game state
+		//send updated game state to all clients
 		if (!game_started)
 		{
 			continue;
 		}
 		
-		//TODO: replace with *your* game state update
-		// std::string status_message = "";
-		// int32_t overall_sum = 0;
-		// for (auto &[c, player] : players) {
-		// 	(void)c; //work around "unused variable" warning on whatever version of g++ github actions is running
-			
-		// 	std::cout << "Player " << player.name << " : " << player.choice << std::endl;
 
-		// 	if (status_message != "") status_message += " + ";
-		// 	status_message += std::to_string(player.total) + " (" + player.name + ")";
-
-		// 	overall_sum += player.total;
-		// }
-		// status_message += " = " + std::to_string(overall_sum);
-		//std::cout << status_message << std::endl; //DEBUG
-
-		//send updated game state to all clients
-		
 		/*
 		* Server game state structure: (40 bytes)
 		* - round num
@@ -152,8 +205,15 @@ int main(int argc, char **argv) {
 
 			//send an update starting with 'm'
 			c->send('m');
-			c->send(game_started ? 'y':'n');
+			c->send(is_dirty ? 'y':'n');
+			if (is_dirty)
+			{
+				c->send((uint8_t)round_num);
+				c->send((uint8_t)question_index);
+				c->send(result);
+			}
 		}
+		is_dirty = false;
 
 	}
 

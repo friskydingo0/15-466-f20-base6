@@ -10,26 +10,53 @@
 #include <fstream>
 #include <random>
 
-#define log std::cout
+#define logmsg std::cout
 
 std::vector< PlayMode::Texture > images;
+std::vector< PlayMode::ImageQuestion > questions;
+
 Load< std::string > image_str(LoadTagDefault, []() -> std::string const * {	// this load is totally fake. It's actually loading the pngs in the image list file. Couldn't figure out how to do it better
 	
 	std::string *ret = new std::string();
-	std::string img_name;
+	std::string line;
 	
 	glm::uvec2 size;
 	std::vector< glm::u8vec4 > data;
+
 	// load image for each line in the data file
-	std::ifstream img_data(data_path("img-list"));	// reading lines based on https://stackoverflow.com/a/7868998
-	while (img_data >> img_name)
+	std::ifstream img_data(data_path("round-info.txt"));	// reading lines based on https://stackoverflow.com/a/7868998
+	while (img_data >> line)
 	{
-		log << "Loading " << img_name << std::endl;
-		load_png(data_path("images/"+img_name), &size, &data, LowerLeftOrigin);
+		logmsg << line << std::endl;
+
+		PlayMode::ImageQuestion img_question;
+		// string split based on - https://stackoverflow.com/a/14266139
+		size_t pos = 0;
+		std::string token;
+		while ((pos = line.find("|")) != std::string::npos) {
+			token = line.substr(0, pos);
+			
+			if (img_question.file_name.length() == 0)
+				img_question.file_name = token;
+			else
+			{
+				img_question.choices.emplace_back(token);
+			}
+			line.erase(0, pos + 1);
+		}
+		
+		logmsg << "Loading image : " << img_question.file_name << std::endl;
+		load_png(data_path("images/"+img_question.file_name), &size, &data, LowerLeftOrigin);
 		images.emplace_back(PlayMode::Texture(size, data));
+		questions.emplace_back(img_question);
 	}
+
 	img_data.close();
 	return ret;
+});
+
+Load< Sound::Sample > bgm_sample(LoadTagDefault, []() -> Sound::Sample const * {
+	return new Sound::Sample(data_path("sounds/bgm.wav"));
 });
 
 PlayMode::PlayMode(Client &client_) : client(client_) {
@@ -135,41 +162,16 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			choice = 1;
 			is_dirty = true;
 			one.pressed = true;
-			glBindTexture(GL_TEXTURE_2D, png_tex);
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, images[choice].size.x, images[choice].size.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, images[choice].data.data());
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-			//since texture uses a mipmap and we haven't uploaded one, instruct opengl to make one for us:
-			glGenerateMipmap(GL_TEXTURE_2D);
-			glBindTexture(GL_TEXTURE_2D, 0);
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_2) {
 			choice = 2;
 			is_dirty = true;
 			two.pressed = true;
-			glBindTexture(GL_TEXTURE_2D, png_tex);
-			glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, images[choice].size.x, images[choice].size.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, images[choice].data.data());
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-
-			//since texture uses a mipmap and we haven't uploaded one, instruct opengl to make one for us:
-			glGenerateMipmap(GL_TEXTURE_2D);
-			glBindTexture(GL_TEXTURE_2D, 0);
 			return true;
 		} else if (evt.key.keysym.sym == SDLK_3) {
 			choice = 3;
 			is_dirty = true;
 			three.pressed = true;
-			return true;
-		} else if (evt.key.keysym.sym == SDLK_4) {
-			choice = 4;
-			is_dirty = true;
-			four.pressed = true;
 			return true;
 		}
 	} else if (evt.type == SDL_KEYUP) {
@@ -182,9 +184,6 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 		} else if (evt.key.keysym.sym == SDLK_3) {
 			three.pressed = false;
 			return true;
-		} else if (evt.key.keysym.sym == SDLK_4) {
-			four.pressed = false;
-			return true;
 		}
 	}
 
@@ -193,14 +192,15 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 
 void PlayMode::update(float elapsed) {
 	
-	//queue data for sending to server:
-	//send a 2-byte message of type 'c':
-	client.connections.back().send('c');
-	client.connections.back().send(is_dirty ? 'y' : 'n');
-
 	if (is_dirty) {
-		log << "Sending choice " << std::to_string(choice) << std::endl;
+		//queue data for sending to server:
+		//send a 2-byte message of type 'c':
+		client.connections.back().send('c');
+		client.connections.back().send(is_dirty ? 'y' : 'n');
+		logmsg << "Sending choice " << std::to_string(choice) << std::endl;
 		client.connections.back().send(choice);
+
+		is_dirty = false;
 	}
 
 	//send/receive data:
@@ -220,26 +220,26 @@ void PlayMode::update(float elapsed) {
 					throw std::runtime_error("Server sent unknown message type '" + std::to_string(type) + "'");
 					break;
 				}
+				int buffer_size = 2;
 
-				// bool time_left = (bool)c->recv_buffer[1];
-				// uint8_t round_num = c->recv_buffer[2];
-				server_message = "Msgc->recv_buffer: " + std::to_string(c->recv_buffer[1]);
+				bool new_data = (c->recv_buffer[1] == 'y');
+				if (new_data)
+				{
+					// show new question
+					uint8_t round_num = (uint8_t)(c->recv_buffer[2]);
+					uint8_t quest_num = (uint8_t)(c->recv_buffer[3]);
+					prev_result = c->recv_buffer[4] == 'w' ? "Soul mates!" : "Incompatible!";
+					buffer_size = 5;
 
-				// uint32_t size = (
-					// (uint32_t(c->recv_buffer[1]) << 16) | (uint32_t(c->recv_buffer[2]) << 8) | (uint32_t(c->recv_buffer[3]))
-				// );
-				// if (c->recv_buffer.size() < 4 + size) break; //if whole message isn't here, can't process
-				//whole message *is* here, so set current server message:
-				// server_message = std::string(c->recv_buffer.begin() + 4, c->recv_buffer.begin() + 4 + size);
+					update_question(quest_num);
+				}
 
 				//and consume this part of the buffer:
-				c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + 2);
+				c->recv_buffer.erase(c->recv_buffer.begin(), c->recv_buffer.begin() + buffer_size);
 			}
 		}
 	}, 0.0);
-
-	// choice = 0;
-	is_dirty = false;
+	
 }
 
 void PlayMode::draw(glm::uvec2 const &drawable_size) {
@@ -248,10 +248,6 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 
 	//vertices will be accumulated into this list and then uploaded+drawn at the end of this function:
 	std::vector< Vertex > vertices;
-	unsigned int indices[] = {  
-        0, 1, 3, // first triangle
-        1, 2, 3  // second triangle
-    };
 
 	//inline helper function for rectangle drawing:
 	auto draw_rectangle = [&vertices](glm::vec2 const &center, glm::vec2 const &radius, glm::u8vec4 const &color) {
@@ -265,14 +261,14 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 		vertices.emplace_back(glm::vec3(center.x-radius.x, center.y+radius.y, 0.0f), color, glm::vec2(0.0f, 1.0f));
 	};
 
-	draw_rectangle(glm::vec2(drawable_size.x * 0.5f, drawable_size.y * 0.5f), glm::vec2(100.0f, 100.0f), glm::u8vec4(0xff, 0xff, 0xff, 0xff));
+	draw_rectangle(glm::vec2(drawable_size.x * 0.5f, drawable_size.y - 200.0f), glm::vec2(200.0f, 200.0f), glm::u8vec4(0xff, 0xff, 0xff, 0xff));
 
 	
-	glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
+	glClearColor(0.01f, 0.01f, 0.01f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
 	
 	//use alpha blending:
-	// glEnable(GL_BLEND);
+	// glEnable(GL_BLEND); // This is causing issues. Disabled for the time being
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	//don't use the depth test:
 	glDisable(GL_DEPTH_TEST);
@@ -282,36 +278,21 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(vertices[0]), vertices.data(), GL_STATIC_DRAW); //upload vertices array
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-	//set color_texture_program as current program:
 	glUseProgram(color_texture_program.program);
 
 	glm::mat4 projection = glm::ortho(0.0f, (float)drawable_size.x, 0.0f, (float)drawable_size.y);
 	glUniformMatrix4fv(color_texture_program.OBJECT_TO_CLIP_mat4, 1, GL_FALSE, glm::value_ptr(projection));
 
-	//use the mapping vertex_buffer_for_color_texture_program to fetch vertex data:
 	glBindVertexArray(vertex_buffer_for_color_texture_program);
 
-	//bind the solid white texture to location zero so things will be drawn just with their colors:
 	glActiveTexture(GL_TEXTURE0);
 	glBindTexture(GL_TEXTURE_2D, png_tex);
-	
-	GL_ERRORS();
-	//run the OpenGL pipeline:
 	glDrawArrays(GL_TRIANGLES, 0, GLsizei(vertices.size()));
 
-	//unbind the solid white texture:
 	glBindTexture(GL_TEXTURE_2D, 0);
 
-	//reset vertex array to none:
 	glBindVertexArray(0);
-
-	//reset current program to none:
 	glUseProgram(0);
-	
-
-	GL_ERRORS(); //PARANOIA: print errors just in case we did something wrong.
-
-
 
 
 	// glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
@@ -339,9 +320,46 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 				glm::u8vec4(0xff, 0xff, 0xff, 0x00));
 		};
 
-		draw_text(glm::vec2(-aspect + 0.1f, 0.0f), server_message, 0.09f);
+		if (game_started)
+		{
+			draw_text(glm::vec2(-aspect + 0.1f, 0.0f), "1. " + questions[current_quest].choices[0], 0.09f);
+			draw_text(glm::vec2(-aspect + 0.1f, -0.1f), "2. " + questions[current_quest].choices[1], 0.09f);
+			draw_text(glm::vec2(-aspect + 0.1f, -0.2f), "3. " + questions[current_quest].choices[2], 0.09f);
 
-		draw_text(glm::vec2(-aspect + 0.1f,-0.9f), "(press WASD to change your total)", 0.09f);
+			draw_text(glm::vec2(-aspect + 0.1f,-0.9f), "Choose your answer with (1, 2 or 3) : " + choice, 0.09f);
+
+			draw_text(glm::vec2(aspect - 0.5f, -0.2f), prev_result, 0.09f);
+			
+		}
+		else
+		{
+			draw_text(glm::vec2(-aspect + 0.1f,-0.9f), "Wait for another player to join...", 0.09f);
+		}
+		
 	}
 	GL_ERRORS();
+}
+
+void PlayMode::update_texture(int new_tex_index) {
+	// https://community.khronos.org/t/changing-reload-or-unbinding-textures/55833/4
+	glBindTexture(GL_TEXTURE_2D, png_tex);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, images[new_tex_index].size.x, images[new_tex_index].size.y, 0, GL_RGBA, GL_UNSIGNED_BYTE, images[new_tex_index].data.data());
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glGenerateMipmap(GL_TEXTURE_2D);
+	glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void PlayMode::update_question(int new_index) {
+	if (current_quest == -1) {
+		//Also start game
+		game_started = true;
+
+		bgm_loop = Sound::loop_3D(*bgm_sample, 1.0f, glm::vec3(0.0f, 0.0f, 0.0f), 0.0f);
+		Sound::listener.position = glm::vec3(0.0f, 0.0f, 0.0f);
+	}
+	current_quest = (int)new_index;
+	update_texture(new_index);
 }

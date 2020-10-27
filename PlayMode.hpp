@@ -2,6 +2,7 @@
 
 #include "Connection.hpp"
 #include "ColorTextureProgram.hpp"
+#include "Sound.hpp"
 
 #include <glm/glm.hpp>
 
@@ -18,6 +19,14 @@ struct PlayMode : Mode {
 	virtual void draw(glm::uvec2 const &drawable_size) override;
 
 	//----- game state -----
+
+	// list of all the images and choices
+	struct ImageQuestion
+	{
+		std::string file_name;
+		std::vector< std::string > choices;
+	};
+	
 
 	// loaded texture references
 	struct Texture {
@@ -60,8 +69,13 @@ struct PlayMode : Mode {
 		uint8_t pressed = 0;
 	} one, two, four, three;
 
+	bool game_started = false;
+
 	// choice var
 	uint8_t choice = 0;
+
+	int current_quest = -1;
+	std::string prev_result;
 
 	// is game state dirty (changed)
 	bool is_dirty = false;
@@ -71,5 +85,12 @@ struct PlayMode : Mode {
 
 	//connection to server:
 	Client &client;
+
+	std::shared_ptr< Sound::PlayingSample > bgm_loop;
+
+	// methods
+	void update_texture(int new_tex_index);
+
+	void update_question(int index);
 
 };
